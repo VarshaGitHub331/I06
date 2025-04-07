@@ -3,7 +3,8 @@ const mongoose = require("mongoose");
 const mysql = require("mysql2/promise");
 const { Client } = require("pg");
 const redis = require("../config/redis");
-
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const extractSchema = async (req, res, next) => {
   const { dbType, connectionString, userId } = req.body;
 
@@ -108,13 +109,16 @@ const executeGeneratedQuery = async (req, res) => {
   }
 
   try {
-    let result;
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
+    let queryExecutor, cleanup;
     if (dbType === "mysql") {
       const conn = await mysql.createConnection(connectionString);
-      const [rows] = await conn.query(generatedQuery);
-      await conn.end();
-      result = rows;
+      queryExecutor = async (q) => {
+        const [rows] = await conn.query(q);
+        return rows;
+      };
+      cleanup = async () => await conn.end();
     } else if (dbType === "postgres") {
       const parsed = new URL(connectionString);
       const client = new Client({
@@ -125,22 +129,79 @@ const executeGeneratedQuery = async (req, res) => {
         database: parsed.pathname.slice(1),
         ssl: { rejectUnauthorized: false },
       });
-
       await client.connect();
-      const { rows } = await client.query(generatedQuery);
-      await client.end();
-      result = rows;
+      queryExecutor = async (q) => {
+        const { rows } = await client.query(q);
+        return rows;
+      };
+      cleanup = async () => await client.end();
     } else {
-      return res
-        .status(400)
-        .json({ error: "MongoDB query execution not supported." });
+      return res.status(400).json({ error: "Unsupported database type." });
     }
 
-    return res
-      .status(200)
-      .json({ success: true, query: generatedQuery, data: result });
+    // Get table name
+    const tableMatch = /FROM\s+(\w+)/i.exec(generatedQuery);
+    const table = tableMatch?.[1];
+    if (!table) {
+      await cleanup?.();
+      return res.status(400).json({ error: "Table not found in query." });
+    }
+
+    // Get columns
+    const columnsData = await queryExecutor(`SELECT * FROM ${table} LIMIT 1`);
+    const columns = columnsData?.length > 0 ? Object.keys(columnsData[0]) : [];
+
+    // Get distinct values
+    const columnValuesMap = {};
+    for (const col of columns) {
+      try {
+        const vals = await queryExecutor(
+          `SELECT DISTINCT ${col} FROM ${table} LIMIT 50`
+        );
+        columnValuesMap[col] = vals.map((row) => row[col]);
+      } catch (err) {
+        console.warn(`⚠️ Skipped column "${col}" due to error: ${err.message}`);
+      }
+    }
+
+    // Gemini Prompt
+    const prompt = `
+  You are an expert SQL assistant. Fix the user's SQL query by aligning filter values with the real column data.
+  
+  Original Query:
+  ${generatedQuery}
+  
+  Table: ${table}
+  Available Columns: ${columns.join(", ")}
+  
+  Available Values:
+  ${Object.entries(columnValuesMap)
+    .map(([col, vals]) => `${col}: [${vals.slice(0, 10).join(", ")}]`)
+    .join("\n")}
+  
+  Return only the corrected SQL query.
+      `;
+
+    const aiResponse = await model.generateContent(prompt);
+    let correctedQuery =
+      aiResponse?.response?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+      generatedQuery;
+
+    // Remove any markdown formatting (```sql)
+    correctedQuery = correctedQuery.replace(/```sql|```/gi, "").trim();
+
+    const finalResult = await queryExecutor(correctedQuery);
+
+    await cleanup?.();
+
+    return res.status(200).json({
+      success: true,
+      originalQuery: generatedQuery,
+      correctedQuery,
+      data: finalResult,
+    });
   } catch (err) {
-    console.error("❌ Query execution failed:", err.message);
+    console.error("❌ Execution failed:", err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 };
