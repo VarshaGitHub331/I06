@@ -1,12 +1,13 @@
-const crypto = require("crypto");
-const mongoose = require("mongoose");
 const mysql = require("mysql2/promise");
 const { Client } = require("pg");
 const redis = require("../config/redis");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { MongoClient } = require("mongodb");
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 const extractSchema = async (req, res, next) => {
-  const { dbType, connectionString, userId } = req.body;
+  const { dbType, connectionString } = req.body;
 
   if (!dbType || !connectionString) {
     return res
@@ -14,10 +15,10 @@ const extractSchema = async (req, res, next) => {
       .json({ message: "Missing userId, dbType, or connectionString." });
   }
 
-  const redisKey = `schema:${userId}`;
+  const redisKey = `schema:${connectionString}`;
 
   try {
-    // 🔁 1. Try Redis cache first
+    // 🔁 Try Redis cache first
     const cached = await redis.get(redisKey);
     if (cached) {
       console.log("✅ Schema served from Redis");
@@ -27,29 +28,29 @@ const extractSchema = async (req, res, next) => {
 
     let schema = {};
 
-    // 2. MongoDB schema extraction
+    // MongoDB
     if (dbType === "mongo") {
-      const conn = await mongoose.createConnection(connectionString, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      });
+      const client = new MongoClient(connectionString);
+      await client.connect();
 
-      const collections = await conn.db.listCollections().toArray();
+      const dbName = new URL(connectionString).pathname.replace("/", "");
+      const db = client.db(dbName);
+      const collections = await db.listCollections().toArray();
 
-      for (let col of collections) {
-        const docs = await conn.db.collection(col.name).findOne();
-        schema[col.name] = docs ? Object.keys(docs) : [];
+      for (const col of collections) {
+        const doc = await db.collection(col.name).findOne();
+        schema[col.name] = doc ? Object.keys(doc) : [];
       }
 
-      await conn.close();
+      await client.close();
     }
 
-    // 3. MySQL schema extraction
+    // MySQL
     else if (dbType === "mysql") {
       const conn = await mysql.createConnection(connectionString);
       const [tables] = await conn.query(`SHOW TABLES`);
 
-      for (let row of tables) {
+      for (const row of tables) {
         const tableName = Object.values(row)[0];
         const [columns] = await conn.query(
           `SHOW COLUMNS FROM \`${tableName}\``
@@ -60,13 +61,11 @@ const extractSchema = async (req, res, next) => {
       await conn.end();
     }
 
-    // 4. PostgreSQL schema extraction
+    // PostgreSQL
     else if (dbType === "postgres") {
       const client = new Client({
         connectionString,
-        ssl: {
-          rejectUnauthorized: false, // ✅ Accept self-signed certificates
-        },
+        ssl: { rejectUnauthorized: false },
       });
 
       await client.connect();
@@ -76,7 +75,7 @@ const extractSchema = async (req, res, next) => {
         WHERE table_schema = 'public' AND table_type='BASE TABLE'
       `);
 
-      for (let row of tablesResult.rows) {
+      for (const row of tablesResult.rows) {
         const tableName = row.table_name;
         const columnsRes = await client.query(`
           SELECT column_name FROM information_schema.columns 
@@ -86,11 +85,12 @@ const extractSchema = async (req, res, next) => {
       }
 
       await client.end();
+    } else {
+      return res.status(400).json({ message: "Unsupported dbType provided." });
     }
 
-    // 5. Store in Redis for 24 hours
     await redis.set(redisKey, JSON.stringify(schema), "EX", 86400);
-    console.log("✅ Schema cached in Redis for user:", userId);
+    console.log("✅ Schema cached in Redis for user:", connectionString);
 
     req.body.schema = schema;
     next();
@@ -101,6 +101,7 @@ const extractSchema = async (req, res, next) => {
       .json({ message: "Internal Server Error", error: e.message });
   }
 };
+
 const executeGeneratedQuery = async (req, res) => {
   const { connectionString, dbType, generatedQuery } = req.body;
 
@@ -112,14 +113,134 @@ const executeGeneratedQuery = async (req, res) => {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     let queryExecutor, cleanup;
-    if (dbType === "mysql") {
+    if (dbType === "mongo") {
+      const client = new MongoClient(connectionString);
+      await client.connect();
+
+      const dbName = new URL(connectionString).pathname.slice(1);
+      const db = client.db(dbName);
+
+      const collections = await db.listCollections().toArray();
+      const collectionName = collections[0]?.name;
+
+      if (!collectionName) {
+        await client.close();
+        return res.status(400).json({ error: "No collections found." });
+      }
+
+      let parsedQuery;
+      try {
+        parsedQuery = eval(`(${generatedQuery})`);
+      } catch (err) {
+        await client.close();
+        console.error("❌ Invalid MongoDB query:", err.message);
+        return res.status(400).json({ error: "Invalid MongoDB query format." });
+      }
+
+      const sampleDocs = await db
+        .collection(collectionName)
+        .find({})
+        .limit(10)
+        .toArray();
+      const fields = [
+        ...new Set(sampleDocs.flatMap((doc) => Object.keys(doc))),
+      ];
+      const fieldValuesMap = {};
+
+      for (const field of fields) {
+        const uniqueVals = await db
+          .collection(collectionName)
+          .aggregate([{ $group: { _id: `$${field}` } }, { $limit: 10 }])
+          .toArray();
+        fieldValuesMap[field] = uniqueVals.map((v) => v._id);
+      }
+
+      const mongoPrompt = `
+    You are a MongoDB expert. Improve or correct the following MongoDB query.
+    
+    Original Query:
+    ${generatedQuery}
+    
+    Collection: ${collectionName}
+    Available Fields: ${fields.join(", ")}
+    
+    Sample Values:
+    ${Object.entries(fieldValuesMap)
+      .map(([k, v]) => `${k}: [${v.join(", ")}]`)
+      .join("\n")}
+    
+    Return only the corrected JavaScript MongoDB query object/array. Don't include any explanation or markdown.
+    `;
+
+      const aiResponse = await model.generateContent(mongoPrompt);
+      let correctedQuery =
+        aiResponse?.response?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+        generatedQuery;
+      correctedQuery = correctedQuery
+        .replace(/```(js|javascript)?|```/gi, "")
+        .trim();
+
+      let finalParsed;
+      try {
+        // Validate that correctedQuery is a plain object/array (not a full db.* call)
+        if (
+          correctedQuery.startsWith("db.") ||
+          correctedQuery.includes(".find(") ||
+          correctedQuery.includes(".aggregate(")
+        ) {
+          throw new Error(
+            "Received a full executable query instead of a filter/pipeline object."
+          );
+        }
+
+        finalParsed = eval(`(${correctedQuery})`);
+      } catch (err) {
+        console.error("❌ Invalid MongoDB query:", err.message);
+        console.log("Corrected Query:", correctedQuery);
+        await client.close();
+        return res
+          .status(400)
+          .json({
+            error:
+              "Corrected MongoDB query is invalid or improperly formatted.",
+          });
+      }
+
+      let data;
+      if (Array.isArray(finalParsed)) {
+        data = await db
+          .collection(collectionName)
+          .aggregate(finalParsed)
+          .toArray();
+      } else {
+        data = await db
+          .collection(collectionName)
+          .find(finalParsed)
+          .limit(50)
+          .toArray();
+      }
+
+      await client.close();
+      return res.status(200).json({
+        success: true,
+        originalQuery: generatedQuery,
+        correctedQuery,
+        data,
+      });
+    }
+
+    // MySQL
+    else if (dbType === "mysql") {
       const conn = await mysql.createConnection(connectionString);
       queryExecutor = async (q) => {
         const [rows] = await conn.query(q);
         return rows;
       };
       cleanup = async () => await conn.end();
-    } else if (dbType === "postgres") {
+    }
+
+    // PostgreSQL
+    else if (dbType === "postgres") {
       const parsed = new URL(connectionString);
       const client = new Client({
         host: parsed.hostname,
@@ -139,7 +260,7 @@ const executeGeneratedQuery = async (req, res) => {
       return res.status(400).json({ error: "Unsupported database type." });
     }
 
-    // Get table name
+    // Table name extraction
     const tableMatch = /FROM\s+(\w+)/i.exec(generatedQuery);
     const table = tableMatch?.[1];
     if (!table) {
@@ -147,11 +268,11 @@ const executeGeneratedQuery = async (req, res) => {
       return res.status(400).json({ error: "Table not found in query." });
     }
 
-    // Get columns
+    // Extract columns
     const columnsData = await queryExecutor(`SELECT * FROM ${table} LIMIT 1`);
     const columns = columnsData?.length > 0 ? Object.keys(columnsData[0]) : [];
 
-    // Get distinct values
+    // Collect sample values
     const columnValuesMap = {};
     for (const col of columns) {
       try {
@@ -166,28 +287,27 @@ const executeGeneratedQuery = async (req, res) => {
 
     // Gemini Prompt
     const prompt = `
-  You are an expert SQL assistant. Fix the user's SQL query by aligning filter values with the real column data.
-  
-  Original Query:
-  ${generatedQuery}
-  
-  Table: ${table}
-  Available Columns: ${columns.join(", ")}
-  
-  Available Values:
-  ${Object.entries(columnValuesMap)
-    .map(([col, vals]) => `${col}: [${vals.slice(0, 10).join(", ")}]`)
-    .join("\n")}
-  
-  Return only the corrected SQL query.
-      `;
+You are an expert SQL assistant. Fix the user's SQL query by aligning filter values with the real column data.
+
+Original Query:
+${generatedQuery}
+
+Table: ${table}
+Available Columns: ${columns.join(", ")}
+
+Available Values:
+${Object.entries(columnValuesMap)
+  .map(([col, vals]) => `${col}: [${vals.slice(0, 10).join(", ")}]`)
+  .join("\n")}
+
+Return only the corrected SQL query.
+    `;
 
     const aiResponse = await model.generateContent(prompt);
     let correctedQuery =
       aiResponse?.response?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
       generatedQuery;
 
-    // Remove any markdown formatting (```sql)
     correctedQuery = correctedQuery.replace(/```sql|```/gi, "").trim();
 
     const finalResult = await queryExecutor(correctedQuery);

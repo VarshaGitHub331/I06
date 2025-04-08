@@ -33,7 +33,7 @@ export default function Signup() {
       login({ token: data.token, user: data.user });
 
       // redirect to dashboard/home
-      router.push("/welcome");
+      router.push("/dashboard");
     } catch (err) {
       console.error(err);
       alert("Error during registration");

@@ -32,7 +32,7 @@ export default function Login() {
       }
 
       login({ user: data.user, token: data.token }); // Update context
-      router.push("/welcome"); // Or wherever you redirect
+      router.push("/dashboard"); // Or wherever you redirect
     } catch (err) {
       setError("Server error. Try again later.");
       console.error(err);

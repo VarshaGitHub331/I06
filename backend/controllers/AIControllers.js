@@ -12,6 +12,24 @@ const generateQueryFromPrompt = async (req, res, next) => {
 
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    let syntaxHint = "";
+    if (dbType === "mongo") {
+      syntaxHint = `
+        The generated MongoDB query must be only the core part of the query.
+
+Return:
+- a plain JavaScript object for a 'find' query, e.g., { age: 25 }
+- or an array of stages for an aggregation query, e.g., [ { $match: { age: 25 } } ]
+
+Do NOT include:
+- any db.collection(...) code
+- .find() or .aggregate() or .toArray()
+- variable declarations
+- markdown or code blocks
+
+Only return the raw query object or array.
+`;
+    }
 
     const queryPrompt = `
 You are an expert in ${dbType} databases. Given the schema and the user's natural language instruction, generate a valid and safe ${dbType} query.
@@ -21,6 +39,8 @@ ${JSON.stringify(schema, null, 2)}
 
 Instruction:
 ${prompt}
+
+${syntaxHint}
 
 Respond ONLY with the generated ${dbType} query. Do NOT wrap the query in markdown or code blocks. Just return the plain query string.
 `;

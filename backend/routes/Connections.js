@@ -4,6 +4,7 @@ const mysql = require("mysql2/promise");
 const { Client } = require("pg");
 const { parse } = require("pg-connection-string"); // 👈 Install this: npm install pg-connection-string
 const Connection = require("../models/Connection");
+const { MongoClient } = require("mongodb");
 
 const router = express.Router();
 const {
@@ -34,12 +35,10 @@ router.post(
 
     try {
       if (dbType === "mongo") {
-        const testConn = await mongoose.createConnection(connectionString, {
-          useNewUrlParser: true,
-          useUnifiedTopology: true,
-        });
-        await testConn.db.admin().ping();
-        await testConn.close();
+        const client = new MongoClient(connectionString);
+        await client.connect();
+        await client.db().command({ ping: 1 });
+        await client.close();
       }
 
       if (dbType === "mysql") {
@@ -90,12 +89,10 @@ router.post("/connect", async (req, res, next) => {
 
   try {
     if (dbType === "mongo") {
-      const testConn = await mongoose.createConnection(connectionString, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      });
-      await testConn.db.admin().ping();
-      await testConn.close();
+      const client = new MongoClient(connectionString);
+      await client.connect();
+      await client.db().command({ ping: 1 });
+      await client.close();
     }
 
     if (dbType === "mysql") {
@@ -160,7 +157,7 @@ router.get("/fetchSchema", async (req, res) => {
   const dbType = detectDbType(connectionString);
   console.log("DB Type:", dbType);
   try {
-    if (dbType == "mongodb") {
+    if (dbType == "mongo") {
       const client = new MongoClient(connectionString);
       await client.connect();
 
@@ -218,6 +215,47 @@ router.get("/fetchSchema", async (req, res) => {
       message: "Failed to fetch schema",
       error: err.message,
     });
+  }
+});
+router.post("/fetchData", async (req, res) => {
+  const { connectionString, type, tableName } = req.body;
+
+  try {
+    if (!connectionString || !type || !tableName) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    if (type === "mysql") {
+      const connection = await mysql.createConnection(connectionString);
+      const [rows] = await connection.execute(
+        `SELECT * FROM \`${tableName}\` LIMIT 100`
+      );
+      await connection.end();
+      return res.json({ data: rows });
+    } else if (type == "postgresql" || type == "postgres") {
+      const client = new Client({ connectionString });
+      await client.connect();
+      const result = await client.query(
+        `SELECT * FROM "${tableName}" LIMIT 100`
+      );
+      await client.end();
+      return res.json({ data: result.rows });
+    } else if (type === "mongo") {
+      const client = new MongoClient(connectionString);
+      await client.connect();
+      const db = client.db(); // uses default DB from URI
+      const collection = db.collection(tableName);
+      const docs = await collection.find({}).limit(100).toArray();
+      await client.close();
+      return res.json({ data: docs });
+    } else {
+      return res.status(400).json({ message: "Unsupported database type." });
+    }
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    return res
+      .status(500)
+      .json({ message: "Failed to fetch data.", error: error.message });
   }
 });
 module.exports = router;
