@@ -3,7 +3,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const UserRouter = require("./routes/User"); // adjust the path if needed
 require("dotenv").config(); // ← this loads .env before anything else
-
+const cors = require("cors"); // ← Import cors
 const app = express();
 const PORT = process.env.PORT || 5000;
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -12,8 +12,8 @@ const MONGODB_URI =
   process.env.MONGO_URI || "mongodb://localhost:27017/yourdbname";
 
 // Middleware to parse JSON
+app.use(cors()); // ← Enable CORS for all origins
 app.use(express.json());
-
 // Connect to MongoDB
 mongoose
   .connect(MONGODB_URI, {

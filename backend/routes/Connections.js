@@ -133,8 +133,11 @@ router.post("/connect", async (req, res, next) => {
 
     await newConn.save();
 
-    req.body.dbType = dbType; // Add dbType to the request body for the next middleware
-    next();
+    res.status(200).json({
+      success: true,
+      message: "Connection saved successfully",
+      connectionId: newConn._id, // Return the connection ID
+    });
   } catch (err) {
     console.error("❌ DB connection failed:", err.message);
     res.status(400).json({ success: false, error: err.message });
