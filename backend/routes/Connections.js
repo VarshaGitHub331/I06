@@ -28,6 +28,7 @@ router.post(
     const { connectionString } = req.body;
 
     const dbType = detectDbType(connectionString);
+    console.log(dbType);
     if (!dbType)
       return res.status(400).json({ error: "Unsupported database type." });
 
@@ -141,6 +142,82 @@ router.post("/connect", async (req, res, next) => {
   } catch (err) {
     console.error("❌ DB connection failed:", err.message);
     res.status(400).json({ success: false, error: err.message });
+  }
+});
+router.get("/getConnections/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const connections = await Connection.find({ userId });
+    res.status(200).json(connections);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+router.get("/fetchSchema", async (req, res) => {
+  const { connectionString } = req.query;
+  console.log(connectionString);
+  const dbType = detectDbType(connectionString);
+  console.log("DB Type:", dbType);
+  try {
+    if (dbType == "mongodb") {
+      const client = new MongoClient(connectionString);
+      await client.connect();
+
+      const dbName = new URL(connectionString).pathname.replace("/", "");
+      const db = client.db(dbName);
+      const collections = await db.listCollections().toArray();
+      await client.close();
+
+      return res.json({
+        success: true,
+        type: "mongodb",
+        schema: collections.map((c) => c.name),
+      });
+    }
+
+    if (dbType == "postgresql" || dbType == "postgres") {
+      const client = new Client({ connectionString });
+      await client.connect();
+
+      const result = await client.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+      `);
+      await client.end();
+
+      return res.json({
+        success: true,
+        type: "postgresql",
+        schema: result.rows.map((r) => r.table_name),
+      });
+    }
+
+    if (dbType == "mysql") {
+      const connection = await mysql.createConnection(connectionString);
+      const [rows] = await connection.query("SHOW TABLES");
+      await connection.end();
+
+      const tableNames = rows.map((row) => Object.values(row)[0]);
+
+      return res.json({
+        success: true,
+        type: "mysql",
+        schema: tableNames,
+      });
+    }
+
+    return res
+      .status(400)
+      .json({ success: false, message: "Unsupported or unknown DB type" });
+  } catch (err) {
+    console.error("Error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch schema",
+      error: err.message,
+    });
   }
 });
 module.exports = router;
