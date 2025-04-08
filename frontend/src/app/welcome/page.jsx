@@ -8,9 +8,25 @@ export default function WelcomeModal() {
   const [nlQuery, setNlQuery] = useState("");
   const [isVisible, setIsVisible] = useState(true);
   const { user } = useAuth(); // Assuming you have user data in context
-  const handleConnect = () => {
-    console.log("DB URL:", dbUrl);
-    setIsVisible(false);
+  const [alias, setAlias] = useState("");
+  const handleConnect = async () => {
+    const res = await fetch("http://localhost:3001/connection/connect", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ connectionString: dbUrl, alias, userId: user.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.error("Connection failed:", data.message);
+      alert(data.message || "Connection failed. Please try again.");
+
+      return;
+    }
+    console.log("Connection successful:", data);
+    alert("Connection successful! You can now ask questions.");
+    console.log("Connected to string ");
   };
 
   const handleMicClick = () => {
@@ -29,7 +45,15 @@ export default function WelcomeModal() {
         <p className="text-sm text-gray-300 mb-6 text-center">
           Connect your database and ask questions in natural language.
         </p>
-
+        <div className="mb-3">
+          <input
+            type="text"
+            placeholder="Connection Alias (e.g., MyDB)"
+            value={alias}
+            onChange={(e) => setAlias(e.target.value)}
+            className="w-full px-4 py-2 rounded bg-[#1e293b] text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
         {/* Database URL input */}
         <div className="flex gap-2 mb-4">
           <input
