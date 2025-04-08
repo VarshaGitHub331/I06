@@ -28,6 +28,25 @@ export default function WelcomeModal() {
     alert("Connection successful! You can now ask questions.");
     console.log("Connected to string ");
   };
+  const generateQuery = async () => {
+    const res = await fetch("http://localhost:3001/connection/generateQuery", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ connectionString: dbUrl, prompt: nlQuery }),
+    });
+    const resultData = await res.json();
+    if (!res.ok) {
+      console.error("Connection failed:", data.message);
+      alert(data.message || "Connection failed. Please try again.");
+
+      return;
+    }
+    console.log("Generation successful:", resultData.data);
+    alert("Query generation successful ! You can now ask questions.");
+    console.log("Connected to string ");
+  };
 
   const handleMicClick = () => {
     console.log("Mic clicked - start listening...");
@@ -37,7 +56,7 @@ export default function WelcomeModal() {
   if (!isVisible) return null;
 
   return (
-    <div className="fixed inset-0 bg-opacity-70 flex justify-center items-center z-50">
+    <div className="fixed inset-0 bg-opacity-70 flex justify-center items-center z-50 m-auto mt-8">
       <div className="bg-[#4b546a] text-white rounded-xl shadow-lg p-6 w-[90%] max-w-md">
         <h2 className="text-2xl font-semibold mb-2 text-center">
           Welcome {user?.name}
@@ -67,7 +86,7 @@ export default function WelcomeModal() {
             onClick={handleConnect}
             className="bg-blue-600 hover:bg-blue-700 transition px-4 py-2 rounded text-white font-medium"
           >
-            Connect
+            Create
           </button>
         </div>
 
@@ -93,6 +112,13 @@ export default function WelcomeModal() {
           onChange={(e) => setNlQuery(e.target.value)}
           className="w-full bg-[#1e293b] text-white p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+
+        <button
+          onClick={generateQuery}
+          className="bg-blue-600 self-end-safe  transition px-4 py-2 rounded text-white font-medium"
+        >
+          Generate Query
+        </button>
       </div>
     </div>
   );

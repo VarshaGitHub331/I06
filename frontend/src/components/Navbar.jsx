@@ -1,8 +1,16 @@
-// src/components/Navbar.jsx
+"use client";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 export default function Navbar() {
   return (
     <nav className="bg-[#0D1117] text-white px-4 py-6 flex items-center justify-between">
-      <h1 className="text-2xl font-bold">SmartQuery+</h1>
+      <Image
+        src="/images/logo.png"
+        alt="Logo"
+        width={150}
+        height={150}
+        className="rounded-lg"
+      />
       <button className="md:hidden">
         <svg
           className="w-6 h-6"
