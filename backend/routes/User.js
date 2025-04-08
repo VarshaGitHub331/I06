@@ -4,7 +4,8 @@ const jwt = require("jsonwebtoken");
 const router = express.Router();
 const User = require("../models/User");
 require("dotenv").config(); // ← this loads .env before anything else
-
+const upload = require("../utils/Multer");
+const cloudinary = require("../utils/Cloudinary");
 // @route   POST /api/auth/register
 // @desc    Register new user
 router.post("/register", async (req, res) => {
@@ -81,5 +82,37 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+router.post("/upload-audio", upload.single("audio"), async (req, res) => {
+  console.log("Received audio file:", req.file);
+  if (!req.file) {
+    return res.status(400).json({ error: "No audio file uploaded" });
+  }
+  try {
+    const filePath = req.file.path;
 
+    // Upload to Cloudinary (audio treated as 'video')
+    const uploadResult = await cloudinary.uploader.upload(filePath, {
+      resource_type: "video",
+      folder: "audio_uploads",
+    });
+
+    // Delete the local file after uploading to cloudinary
+    fs.unlinkSync(filePath);
+
+    // Call FastAPI server with Cloudinary audio URL
+    const response = await axios.post("http://localhost:8000/transcribe", {
+      audio_url: uploadResult.secure_url,
+    });
+
+    return res.json({
+      cloudinary_url: uploadResult.secure_url,
+      transcription: response.data.transcription,
+    });
+  } catch (err) {
+    console.error("Error in /upload-audio:", err);
+    return res
+      .status(500)
+      .json({ error: "Upload or transcription failed", details: err.message });
+  }
+});
 module.exports = router;

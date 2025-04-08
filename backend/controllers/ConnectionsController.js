@@ -198,12 +198,9 @@ const executeGeneratedQuery = async (req, res) => {
         console.error("❌ Invalid MongoDB query:", err.message);
         console.log("Corrected Query:", correctedQuery);
         await client.close();
-        return res
-          .status(400)
-          .json({
-            error:
-              "Corrected MongoDB query is invalid or improperly formatted.",
-          });
+        return res.status(400).json({
+          error: "Corrected MongoDB query is invalid or improperly formatted.",
+        });
       }
 
       let data;
@@ -221,11 +218,62 @@ const executeGeneratedQuery = async (req, res) => {
       }
 
       await client.close();
+      // Chart Formatting Prompt
+      const chartPrompt = `
+      You are a data visualization expert. Based on the following data from a database query, return ONLY a valid JSON structure for chart.js with no explanation or extra text. DO NOT include markdown formatting or commentary. 
+      
+      The JSON must include:
+      - A top-level "type" field indicating the chart type ("bar", "pie", or "line").
+      - A "labels" array for X-axis or categories.
+      - A "datasets" array with one or more datasets.
+      
+      Only respond with clean JSON. No markdown, no triple backticks, no extra words.
+      
+      Example response:
+      {
+        "type": "bar",
+        "labels": ["Label1", "Label2"],
+        "datasets": [
+          {
+            "label": "My Dataset",
+            "data": [10, 20]
+          }
+        ]
+      }
+      
+      Data:
+      ${JSON.stringify(data.slice(0, 20))}
+      `;
+
+      const chartResponse = await model.generateContent(chartPrompt);
+      console.log("Chart data could be", chartResponse);
+      let chartData;
+      try {
+        let raw =
+          chartResponse?.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!raw) throw new Error("No text content from LLM");
+
+        // Remove ```json ... ``` or ``` blocks
+        // Remove ```json blocks and smart quotes
+        raw = raw
+          .trim()
+          .replace(/^```(?:json)?/, "")
+          .replace(/```$/, "")
+          .replace(/[‘’]/g, "'") // Fix single smart quotes
+          .replace(/[“”]/g, '"'); // Fix double smart quotes
+        console.log(raw + " is the chart data");
+        chartData = JSON.parse(raw);
+      } catch (err) {
+        console.warn("⚠️ Failed to parse chart data. Skipping chart response.");
+      }
+
       return res.status(200).json({
         success: true,
         originalQuery: generatedQuery,
         correctedQuery,
         data,
+        chartData,
       });
     }
 
@@ -313,12 +361,66 @@ Return only the corrected SQL query.
     const finalResult = await queryExecutor(correctedQuery);
 
     await cleanup?.();
+    // Chart Formatting Prompt
+    const chartPrompt = `
+You are a data visualization expert. Based on the following data from a database query, return ONLY a valid JSON structure for chart.js with no explanation or extra text. DO NOT include markdown formatting or commentary. 
+
+The JSON must include:
+- A top-level "type" field indicating the chart type ("bar", "pie", or "line").
+- A "labels" array for X-axis or categories.
+- A "datasets" array with one or more datasets.
+
+Only respond with clean JSON. No markdown, no triple backticks, no extra words.
+
+Example response:
+{
+  "type": "bar",
+  "labels": ["Label1", "Label2"],
+  "datasets": [
+    {
+      "label": "My Dataset",
+      "data": [10, 20]
+    }
+  ]
+}
+
+Data:
+${JSON.stringify(finalResult.slice(0, 20))}
+`;
+
+    const chartResponse = await model.generateContent(chartPrompt);
+    console.log("Chart response could be", chartResponse);
+    let chartData = null;
+
+    try {
+      let raw =
+        chartResponse?.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!raw) throw new Error("No text content from LLM");
+
+      // Remove ```json ... ``` or ``` blocks
+      // Remove ```json blocks and smart quotes
+      raw = raw
+        .trim()
+        .replace(/^```(?:json)?/, "")
+        .replace(/```$/, "")
+        .replace(/[‘’]/g, "'") // Fix single smart quotes
+        .replace(/[“”]/g, '"'); // Fix double smart quotes
+      console.log(raw + " is the chart data");
+      chartData = JSON.parse(raw);
+    } catch (err) {
+      console.warn(
+        "⚠️ Failed to parse chart data. Skipping chart response.",
+        err
+      );
+    }
 
     return res.status(200).json({
       success: true,
       originalQuery: generatedQuery,
       correctedQuery,
       data: finalResult,
+      chartData,
     });
   } catch (err) {
     console.error("❌ Execution failed:", err.message);
