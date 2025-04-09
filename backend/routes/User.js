@@ -6,6 +6,8 @@ const User = require("../models/User");
 require("dotenv").config(); // ← this loads .env before anything else
 const upload = require("../utils/Multer");
 const cloudinary = require("../utils/Cloudinary");
+const fs = require("fs");
+const axios = require("axios");
 // @route   POST /api/auth/register
 // @desc    Register new user
 router.post("/register", async (req, res) => {
@@ -100,12 +102,14 @@ router.post("/upload-audio", upload.single("audio"), async (req, res) => {
     fs.unlinkSync(filePath);
 
     // Call FastAPI server with Cloudinary audio URL
-    const response = await axios.post("http://localhost:8000/transcribe", {
-      audio_url: uploadResult.secure_url,
-    });
+    const response = await axios.post(
+      "https://69d6-34-48-56-59.ngrok-free.app/transcribe",
+      {
+        url: uploadResult.secure_url,
+      }
+    );
 
     return res.json({
-      cloudinary_url: uploadResult.secure_url,
       transcription: response.data.transcription,
     });
   } catch (err) {

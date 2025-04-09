@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import SmartChart from "@/components/SmartChart";
+import { Upload, Mic } from "lucide-react";
 const DynamicTable = ({ data }) => {
   if (!data || data.length === 0) {
     return <p className="text-gray-400 text-sm mt-4">No data found.</p>;
@@ -260,22 +261,50 @@ export default function Dashboard() {
       {/* Main Panel */}
       <div className="flex-1 p-6 relative">
         {/* Search */}
-        <div className="mb-6">
-          <div className="relative">
+        <div className="relative flex items-center gap-2">
+          <input
+            type="text"
+            value={nlQuery}
+            onChange={(e) => setNlQuery(e.target.value)}
+            placeholder="Type your natural language query or use voice"
+            className="w-full pl-4 pr-10 py-2 rounded bg-[#1E293B] text-white placeholder:text-gray-400"
+          />
+
+          <label htmlFor="audio-upload">
+            <Upload className="text-gray-400 w-5 h-5 cursor-pointer hover:text-blue-400" />
             <input
-              type="text"
-              value={nlQuery}
-              onChange={(e) => setNlQuery(e.target.value)}
-              placeholder="Type your natural language query or use voice"
-              className="w-full pl-4 pr-10 py-2 rounded bg-[#1E293B] text-white placeholder:text-gray-400"
-            />
-            <Search
-              className="absolute right-3 top-2.5 text-gray-400 w-5 h-5"
-              onClick={(e) => {
-                generateQuery();
+              type="file"
+              accept="audio/*"
+              id="audio-upload"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append("audio", file);
+
+                const res = await fetch(
+                  "http://localhost:3001/user/upload-audio",
+                  {
+                    method: "POST",
+                    body: formData,
+                  }
+                );
+
+                const result = await res.json();
+                if (res.ok) {
+                  setNlQuery(result.transcription);
+                } else {
+                  alert(result.message || "Failed to process audio.");
+                }
               }}
             />
-          </div>
+          </label>
+
+          <Search
+            className="text-gray-400 w-5 h-5 cursor-pointer hover:text-blue-400"
+            onClick={() => generateQuery()}
+          />
         </div>
 
         {/* Table Selection */}
